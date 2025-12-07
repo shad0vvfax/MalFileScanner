@@ -7,6 +7,7 @@ Useful for malware analysis and security research
 import re
 import sys
 import argparse
+import hashlib
 from pathlib import Path
 from collections import Counter
 
@@ -398,6 +399,38 @@ def detect_privilege_escalation(file_path):
     
     return findings
 
+def calculate_file_hash(file_path, algorithm='sha256', buffer_size=8192):
+    """
+    Computes the hash of a file using the specified algorithm.
+
+    Args:
+        file_path (str): The path to the file.
+        algorithm (str): The hashing algorithm to use (e.g., 'md5', 'sha1', 'sha256').
+        buffer_size (int): The size of chunks to read the file in (bytes).
+
+    Returns:
+        str: The hexadecimal hash digest of the file, or None if file not found.
+    """
+    # Create a hash object
+    try:
+        hash_func = hashlib.new(algorithm)
+    except ValueError:
+        print(f"Error: Invalid hash algorithm '{algorithm}'")
+        return None
+
+    # Open the file in binary mode for reading
+    try:
+        with open(file_path, 'rb') as f:
+            # Read the file in chunks and update the hash object
+            while chunk := f.read(buffer_size):
+                hash_func.update(chunk)
+        
+        # Return the hexadecimal representation of the digest
+        return hash_func.hexdigest()
+    except FileNotFoundError:
+        print(f"Error: File not found at '{file_path}'")
+        return None
+
 def main():
     parser = argparse.ArgumentParser(
         description='Scan binary files for potentially suspicious strings'
@@ -421,6 +454,8 @@ def main():
         sys.exit(1)
     
     print(f"Scanning: {file_path}")
+    file_hash = calculate_file_hash(file_path)
+    print(f"sha256 file hash: {file_hash}")
     print(f"File size: {file_path.stat().st_size:,} bytes")
     print("-" * 60)
     
