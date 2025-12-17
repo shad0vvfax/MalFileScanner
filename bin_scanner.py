@@ -41,9 +41,14 @@ SUSPICIOUS_KEYWORDS = [
     'trojan.downloader', 'trojan-downloader', 'virus.', 'worm.', 'rootkit',
     'mimikatz', 'procdump', 'hashdump', 'secretsdump', 'lazagne',
     'bypass uac', 'bypass amsi', 'bypass defender', 'disable defender',
-    'reverse_shell', 'bind_shell', 'meterpreter', 'cobalt_strike', 'cobaltstrike',
-    'privilege_escalation', 'privesc', 'impersonate_token',
-    'invoke-mimikatz', 'invoke-bloodhound', 'powersploit'
+    'reverse shell', 'bind shell', 'php shell', 'web shell', 'privilege escalation',
+    'escalation', 'meterpreter', 'cobalt_strike', 'cobaltstrike',
+    'privesc', 'impersonate_token', 'xploit', 'exploit',
+    'invoke-mimikatz', 'invoke-bloodhound', 'powersploit', 'payload', 'base64', 'ticket',
+    'encode', 'decode', 'encrypt', 'decrypt', '1337', 'backd00r', 'crack', 'cracked',
+    'root', 'admin', 'administrator', 'msfvenom', 'persistence',
+    'vulnerability', 'vuln', '0day', 'zero-day', 'credentials', 'creds', 'credz',
+    'spawn shell', 'pop shell', 'authorized_keys', 'authorized_hosts',
 ]
 
 # SSH-related suspicious patterns
@@ -681,3 +686,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
