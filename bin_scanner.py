@@ -35,20 +35,58 @@ SQL_INJECTION_PATTERNS = {
     'Information Schema Access': r"(?i)(?:union|select).*information_schema\.(?:tables|columns)",
 }
 
-# Suspicious keywords
+# Suspicious keywords - Use specific phrases to reduce false positives
 SUSPICIOUS_KEYWORDS = [
+    # Malware types (specific variants)
     'keylogger', 'backdoor', 'ransomware', 'cryptolocker', 'cryptor', 'stealer', 
     'trojan.downloader', 'trojan-downloader', 'virus.', 'worm.', 'rootkit',
+    
+    # Post-exploitation tools
     'mimikatz', 'procdump', 'hashdump', 'secretsdump', 'lazagne',
+    'invoke-mimikatz', 'invoke-bloodhound', 'powersploit', 'msfvenom',
+    
+    # Evasion techniques
     'bypass uac', 'bypass amsi', 'bypass defender', 'disable defender',
-    'reverse shell', 'bind shell', 'php shell', 'web shell', 'privilege escalation',
-    'escalation', 'meterpreter', 'cobalt_strike', 'cobaltstrike',
-    'privesc', 'impersonate_token', 'xploit', 'exploit',
-    'invoke-mimikatz', 'invoke-bloodhound', 'powersploit', 'payload', 'base64', 'ticket',
-    'encode', 'decode', 'encrypt', 'decrypt', '1337', 'backd00r', 'crack', 'cracked',
-    'root', 'admin', 'administrator', 'msfvenom', 'persistence',
-    'vulnerability', 'vuln', '0day', 'zero-day', 'credentials', 'creds', 'credz',
-    'spawn shell', 'pop shell', 'authorized_keys', 'authorized_hosts',
+    'disable antivirus', 'kill av',
+    
+    # Remote access patterns
+    'reverse_shell', 'bind_shell', 'reverse shell', 'bind shell',
+    'php shell', 'web shell', 'webshell', 'shell_exec',
+    'spawn shell', 'pop shell', '/bin/sh -i', '/bin/bash -i',
+    
+    # Attack frameworks
+    'meterpreter', 'cobalt_strike', 'cobaltstrike', 'metasploit',
+    'empire agent', 'sliver implant',
+    
+    # Privilege escalation (specific context)
+    'privilege_escalation', 'privesc', 'priv esc', 'root exploit',
+    'impersonate_token', 'impersonate token',
+    
+    # Credential theft (specific patterns)
+    'dump_creds', 'steal_creds', 'credz', 'dump lsass',
+    'steal password', 'password stealer', 'grab credentials',
+    
+    # Persistence mechanisms
+    'add_persistence', 'install_backdoor', 'persistence_script',
+    'add registry run', 'scheduled_task_backdoor',
+    
+    # Exploit/vulnerability specific
+    '0day', 'zero-day', 'zero day', 'exploit-db', 'cve-exploit',
+    'exploit kit', 'exploit_code',
+    
+    # Obfuscation/encoding (suspicious context)
+    'base64_payload', 'encoded_payload', 'decrypt_payload',
+    'xor_decrypt', 'decode_shellcode',
+    
+    # Leet speak / intentional obfuscation (as complete words)
+    ' h4ck ', ' backd00r ', ' p4yl04d ', ' sh3ll ',
+    ' cr4ck ', ' pwn3d ', ' r00t ', ' 1337 ',
+    
+    # Authentication bypass
+    'bypass_auth', 'skip_auth', 'auth_bypass', 'sql_inject',
+    
+    # SSH abuse (specific)
+    'authorized_keys backdoor', 'ssh_backdoor', 'ssh_persist',
 ]
 
 # SSH-related suspicious patterns
@@ -214,22 +252,67 @@ def scan_for_patterns(strings):
             matches.extend(found)
         
         if matches:
-            # Filter IP addresses to remove OIDs (certificate identifiers)
+            # Filter IP addresses to remove OIDs and version numbers
             if category == 'IP Addresses':
-                # Valid IPs shouldn't have leading zeros or start with 0.x or 1.x typically for OIDs
                 filtered_matches = []
                 for ip in matches:
                     octets = ip.split('.')
-                    # Check if it looks like a real IP (not an OID)
-                    # OIDs often have single digit octets like 1.3.x.x or 2.5.x.x
-                    if (octets[0] not in ['1', '2'] or 
-                        (octets[0] in ['1', '2'] and int(octets[1]) > 50)):
-                        # Also check for patterns like 96.00.01.48 (with leading zeros)
-                        if not any(o.startswith('0') and len(o) > 1 for o in octets):
+                    try:
+                        # Check if it looks like a real IP (not an OID or version number)
+                        # Real IPs: typically have at least one octet > 10 in first two positions
+                        # or are well-known like 127.0.0.1, 192.168.x.x, 10.x.x.x
+                        first = int(octets[0])
+                        second = int(octets[1]) if len(octets) > 1 else 0
+                        
+                        # Filter out patterns that look like versions (x.0.xxx.x or small numbers)
+                        if first in [0, 1, 2, 3, 4, 5, 6] and second == 0:
+                            continue  # Likely a version number like 4.0.223.2
+                        
+                        # Also check for leading zeros (not valid in IPs)
+                        if any(o.startswith('0') and len(o) > 1 for o in octets):
+                            continue
+                        
+                        # Keep localhost, private ranges, and IPs with reasonable values
+                        if first in [10, 127, 172, 192] or first > 50:
                             filtered_matches.append(ip)
+                    except (ValueError, IndexError):
+                        continue
                 
                 if filtered_matches:
                     findings[category] = list(set(filtered_matches))[:20]
+            
+            # Filter URLs to remove format strings and malformed URLs
+            elif category == 'URLs':
+                filtered_urls = []
+                for url in matches:
+                    # Skip format strings
+                    if '%s' in url or '%d' in url:
+                        continue
+                    # Skip malformed URLs
+                    if url.startswith('https://https://') or url.startswith('http://http://'):
+                        continue
+                    # Skip if too short (likely fragments)
+                    if len(url) < 15:
+                        continue
+                    # Clean up URLs with concatenated garbage (remove trailing non-URL chars)
+                    # URLs should end with valid chars: alphanumeric, /, -, or file extensions
+                    url = re.sub(r'[^a-zA-Z0-9/\-._~:?#\[\]@!            # Filter URLs to remove format strings and malformed URLs
+            elif category == 'URLs':
+                filtered_urls = []
+                for url in matches:
+                    # Skip format strings
+                    if '%s' in url or '%d' in url:
+                        continue
+                    # Skip malformed URLs
+                    if url.startswith('https://https://') or url.startswith('http://http://'):
+                        continue
+                    # Skip if too short (likely fragments)
+                    if len(url) < 15:
+                        continue
+                    filtered_urls.append(url)
+                
+                if filtered_urls:
+                    findings[category] = list(set(filtered_urls))[:20]\'()*+,;=%]+
             else:
                 findings[category] = list(set(matches))[:20]  # Limit to 20 unique matches
     
@@ -267,6 +350,8 @@ def detect_shellcode(file_path):
         with open(file_path, 'rb') as f:
             data = f.read()
         
+        file_size = len(data)
+        
         # Check for shellcode signatures (with higher thresholds to reduce false positives)
         signatures_found = []
         
@@ -276,13 +361,19 @@ def detect_shellcode(file_path):
             count = data.count(nop_sled)
             signatures_found.append(f"Long NOP Sled (20+ NOPs) (found {count} times)")
         
-        # Syscalls - only in suspicious quantities
+        # Syscalls - adjust thresholds based on file size (Go binaries are large)
         syscall_x64_count = data.count(b'\x0f\x05')
-        if syscall_x64_count > 200:  # Increased threshold
-            signatures_found.append(f"Excessive x64 syscalls ({syscall_x64_count} times)")
+        # For large files (>5MB), be more lenient
+        syscall_threshold = 500 if file_size > 5_000_000 else 200
+        
+        if syscall_x64_count > syscall_threshold:
+            # Calculate density (syscalls per MB)
+            density = syscall_x64_count / (file_size / 1_000_000)
+            if density > 200:  # More than 200 per MB is suspicious
+                signatures_found.append(f"Very high x64 syscall density ({syscall_x64_count} times, {density:.0f}/MB)")
         
         linux_syscall_count = data.count(b'\xcd\x80')
-        if linux_syscall_count > 100:  # Increased threshold
+        if linux_syscall_count > 100:
             signatures_found.append(f"Excessive Linux syscalls ({linux_syscall_count} times)")
         
         # GetPC trick - common in position-independent shellcode, but also in legit code
@@ -293,8 +384,11 @@ def detect_shellcode(file_path):
             b'WriteProcessMemory', b'NtCreateThreadEx'
         ])
         
-        if getpc_count > 50 and suspicious_apis:  # Only flag if both present
-            signatures_found.append(f"GetPC trick with suspicious APIs ({getpc_count} times)")
+        if getpc_count > 50 and suspicious_apis:
+            # Check density
+            getpc_density = getpc_count / (file_size / 1_000_000)
+            if getpc_density > 50:  # More than 50 per MB
+                signatures_found.append(f"GetPC trick with suspicious APIs ({getpc_count} times, {getpc_density:.0f}/MB)")
         
         if signatures_found:
             findings['Shellcode Signatures'] = signatures_found
@@ -310,15 +404,514 @@ def detect_shellcode(file_path):
             (b'RtlCreateUserThread', 'User thread creation'),
         ]
         
-        for api, description in api_patterns:
-            if api in data:
-                suspicious_apis_list.append(f"{api.decode('ascii')} ({description})")
+        # Only report if multiple suspicious APIs are present
+        # For large files (Go/Rust), require at least 4 APIs to reduce false positives
+        min_api_count = 4 if file_size > 5_000_000 else 3
+        api_count = sum(1 for api, _ in api_patterns if api in data)
+        
+        if api_count >= min_api_count:
+            for api, description in api_patterns:
+                if api in data:
+                    suspicious_apis_list.append(f"{api.decode('ascii')} ({description})")
         
         if suspicious_apis_list:
             findings['Suspicious Memory APIs'] = suspicious_apis_list
         
         # Detect high entropy sections (potential encrypted/obfuscated shellcode)
-        entropy_sections = detect_high_entropy_sections(data, threshold=7.5)  # Increased threshold
+        entropy_sections = detect_high_entropy_sections(data, threshold=7.5)
+        if entropy_sections:
+            findings['Very High Entropy Sections'] = entropy_sections
+        
+        # Check for excessive executable opcodes (more strict threshold)
+        opcode_density = calculate_opcode_density(data)
+        if opcode_density > 0.6:  # Increased from 0.5 to 0.6
+            findings['Very High Opcode Density'] = [f"{opcode_density:.2%} of file contains common x86 opcodes"]
+        
+    except Exception as e:
+        print(f"Error during shellcode detection: {e}", file=sys.stderr)
+    
+    return findings
+
+def detect_high_entropy_sections(data, chunk_size=256, threshold=7.0):
+    """Detect sections with high entropy (potential encrypted shellcode)."""
+    import math
+    
+    high_entropy_sections = []
+    consecutive_high = 0
+    first_high_offset = None
+    
+    for i in range(0, len(data) - chunk_size, chunk_size):
+        chunk = data[i:i+chunk_size]
+        
+        # Calculate Shannon entropy
+        if len(chunk) == 0:
+            continue
+            
+        entropy = 0
+        counter = Counter(chunk)
+        for count in counter.values():
+            p = count / len(chunk)
+            entropy -= p * math.log2(p)
+        
+        if entropy >= threshold:
+            if first_high_offset is None:
+                first_high_offset = i
+            consecutive_high += 1
+        else:
+            if consecutive_high >= 5:  # Only report if 5+ consecutive high-entropy chunks
+                size_kb = (consecutive_high * chunk_size) / 1024
+                high_entropy_sections.append(
+                    f"Offset 0x{first_high_offset:08x}: {size_kb:.1f}KB of data with entropy >= {threshold:.1f}"
+                )
+            consecutive_high = 0
+            first_high_offset = None
+    
+    # Check final section
+    if consecutive_high >= 5:
+        size_kb = (consecutive_high * chunk_size) / 1024
+        high_entropy_sections.append(
+            f"Offset 0x{first_high_offset:08x}: {size_kb:.1f}KB of data with entropy >= {threshold:.1f}"
+        )
+    
+    return high_entropy_sections[:5]  # Limit to first 5
+
+def calculate_opcode_density(data):
+    """Calculate density of common x86 opcodes."""
+    # Common x86/x64 opcodes
+    common_opcodes = [
+        0x50, 0x51, 0x52, 0x53, 0x54, 0x55, 0x56, 0x57,  # PUSH
+        0x58, 0x59, 0x5A, 0x5B, 0x5C, 0x5D, 0x5E, 0x5F,  # POP
+        0x90,  # NOP
+        0xC3,  # RET
+        0xE8, 0xE9,  # CALL, JMP
+        0xFF,  # Various (CALL, JMP indirect)
+        0x8B, 0x89,  # MOV
+        0x31, 0x33,  # XOR
+        0x48, 0x4C,  # REX prefixes (x64)
+    ]
+    
+    opcode_count = sum(1 for byte in data if byte in common_opcodes)
+    return opcode_count / len(data) if len(data) > 0 else 0
+
+def detect_privilege_escalation(file_path):
+    """Detect privilege escalation techniques and indicators."""
+    findings = {}
+    
+    try:
+        with open(file_path, 'rb') as f:
+            data = f.read()
+        
+        file_size = len(data)
+        
+        # Filter out categories that commonly cause false positives
+        filtered_patterns = {
+            k: v for k, v in PRIVESC_PATTERNS.items() 
+            if k not in ['Windows Service Abuse', 'DLL/SO Injection', 'Credential Access']
+        }
+        
+        # For the filtered categories, check for patterns
+        for category, patterns in filtered_patterns.items():
+            matches = []
+            for pattern in patterns:
+                if pattern in data:
+                    # Count occurrences
+                    count = data.count(pattern)
+                    
+                    # Only flag if it appears multiple times or is particularly suspicious
+                    if count >= 3 or category in ['Windows UAC Bypass', 'Linux Kernel Exploits']:
+                        pattern_str = pattern.decode('ascii', errors='ignore')
+                        matches.append(f"{pattern_str} ({count} occurrences)")
+            
+            if matches:
+                findings[category] = matches[:10]  # Limit to 10 per category
+        
+        # Special handling for highly suspicious patterns
+        highly_suspicious = {}
+        
+        # Check for token manipulation (strong indicator)
+        token_privs = [b'SeDebugPrivilege', b'SeImpersonatePrivilege']
+        token_matches = [p.decode('ascii') for p in token_privs if data.count(p) > 2]
+        if token_matches:
+            highly_suspicious['Token Privilege Manipulation'] = token_matches
+        
+        # Check for known UAC bypass techniques
+        uac_bypasses = [b'eventvwr.exe', b'fodhelper.exe', b'sdclt.exe']
+        uac_context = []
+        for bypass in uac_bypasses:
+            if bypass in data and b'mscfile' in data:  # Must have registry component too
+                uac_context.append(bypass.decode('ascii') + ' with registry manipulation')
+        if uac_context:
+            highly_suspicious['UAC Bypass Techniques'] = uac_context
+        
+        # Check for process injection - but filter out ptrace in large binaries (Go runtime)
+        if 'Process Injection' in findings:
+            # For large files (Go/Rust), ptrace alone is likely a false positive
+            if file_size > 5_000_000:
+                findings['Process Injection'] = [
+                    m for m in findings['Process Injection'] 
+                    if not m.startswith('ptrace')
+                ]
+                if not findings['Process Injection']:
+                    del findings['Process Injection']
+        
+        # Merge highly suspicious findings
+        findings.update(highly_suspicious)
+        
+    except Exception as e:
+        print(f"Error during privilege escalation detection: {e}", file=sys.stderr)
+    
+    return findings
+
+def detect_ssh_patterns(file_path):
+    """Detect SSH-related patterns that could indicate exploitation."""
+    findings = {}
+    
+    try:
+        with open(file_path, 'rb') as f:
+            data = f.read()
+        
+        for category, patterns in SSH_PATTERNS.items():
+            matches = []
+            for pattern in patterns:
+                if pattern in data:
+                    count = data.count(pattern)
+                    pattern_str = pattern.decode('ascii', errors='ignore')
+                    
+                    # Get context for better analysis
+                    idx = data.find(pattern)
+                    start = max(0, idx - 30)
+                    end = min(len(data), idx + len(pattern) + 30)
+                    context = data[start:end]
+                    context_str = ''.join(c if 32 <= ord(c) < 127 else '.' 
+                                        for c in context.decode('ascii', errors='ignore'))
+                    
+                    if len(context_str) > 80:
+                        context_str = context_str[:40] + '...' + context_str[-37:]
+                    
+                    matches.append(f"{pattern_str} [{count}x]")
+            
+            if matches:
+                findings[category] = matches
+        
+    except Exception as e:
+        print(f"Error during SSH pattern detection: {e}", file=sys.stderr)
+    
+    return findings
+
+def calculate_file_hashes(file_path):
+    """Calculate MD5, SHA1, and SHA256 hashes of the file."""
+    hashes = {}
+    
+    try:
+        with open(file_path, 'rb') as f:
+            data = f.read()
+        
+        hashes['MD5'] = hashlib.md5(data).hexdigest()
+        hashes['SHA1'] = hashlib.sha1(data).hexdigest()
+        hashes['SHA256'] = hashlib.sha256(data).hexdigest()
+        
+    except Exception as e:
+        print(f"Error calculating hashes: {e}", file=sys.stderr)
+    
+    return hashes
+
+def get_file_metadata(file_path):
+    """Get file metadata including timestamps and size."""
+    metadata = {}
+    
+    try:
+        stat = file_path.stat()
+        metadata['File Size'] = f"{stat.st_size:,} bytes ({stat.st_size / (1024*1024):.2f} MB)"
+        metadata['Created'] = datetime.fromtimestamp(stat.st_ctime).strftime('%Y-%m-%d %H:%M:%S')
+        metadata['Modified'] = datetime.fromtimestamp(stat.st_mtime).strftime('%Y-%m-%d %H:%M:%S')
+        metadata['Accessed'] = datetime.fromtimestamp(stat.st_atime).strftime('%Y-%m-%d %H:%M:%S')
+        
+    except Exception as e:
+        print(f"Error getting metadata: {e}", file=sys.stderr)
+    
+    return metadata
+
+def main():
+    parser = argparse.ArgumentParser(
+        description='Scan binary files for potentially suspicious strings'
+    )
+    parser.add_argument('file', help='Binary file to scan')
+    parser.add_argument('-m', '--min-length', type=int, default=4,
+                       help='Minimum string length (default: 4)')
+    parser.add_argument('-e', '--encoding', choices=['ascii', 'unicode', 'both'],
+                       default='both', help='String encoding to extract')
+    parser.add_argument('-o', '--output', help='Output file for results')
+    parser.add_argument('-v', '--verbose', action='store_true',
+                       help='Show all findings including potential false positives')
+    parser.add_argument('--no-filter', action='store_true',
+                       help='Disable false positive filtering (show everything)')
+    
+    args = parser.parse_args()
+    
+    file_path = Path(args.file)
+    if not file_path.exists():
+        print(f"Error: File '{args.file}' not found", file=sys.stderr)
+        sys.exit(1)
+    
+    # Calculate hashes and get metadata
+    print("=" * 60)
+    print("FILE ANALYSIS")
+    print("=" * 60)
+    print(f"File: {file_path.name}")
+    print(f"Path: {file_path.absolute()}")
+    
+    metadata = get_file_metadata(file_path)
+    print(f"Size: {metadata.get('File Size', 'Unknown')}")
+    
+    print("\nCalculating file hashes...")
+    hashes = calculate_file_hashes(file_path)
+    
+    print("\n" + "=" * 60)
+    print("SCANNING FOR SUSPICIOUS PATTERNS")
+    print("=" * 60)
+    
+    # Extract strings
+    all_strings = []
+    if args.encoding in ['ascii', 'both']:
+        all_strings.extend(extract_strings(file_path, args.min_length, 'ascii'))
+    if args.encoding in ['unicode', 'both']:
+        all_strings.extend(extract_strings(file_path, args.min_length, 'unicode'))
+    
+    all_strings = list(set(all_strings))  # Remove duplicates
+    print(f"Extracted {len(all_strings)} unique strings\n")
+    
+    # Scan for patterns
+    pattern_findings = scan_for_patterns(all_strings)
+    
+    # Filter out certificate-related URLs unless verbose
+    if not args.verbose and not args.no_filter and 'URLs' in pattern_findings:
+        cert_keywords = ['pki', 'crl', 'ocsp', 'crt', 'cer', 'entrust', 'certificate']
+        filtered_urls = [url for url in pattern_findings['URLs'] 
+                        if not any(kw in url.lower() for kw in cert_keywords)]
+        if filtered_urls:
+            pattern_findings['URLs'] = filtered_urls
+        else:
+            del pattern_findings['URLs']
+    
+    # Filter out developer emails unless verbose
+    if not args.verbose and not args.no_filter and 'Email Addresses' in pattern_findings:
+        dev_domains = ['openssl.org', 'cryptsoft.com', 'caltech.edu', 'epfl.ch', 'gzip.org']
+        filtered_emails = [email for email in pattern_findings['Email Addresses']
+                          if not any(domain in email.lower() for domain in dev_domains)]
+        if filtered_emails:
+            pattern_findings['Email Addresses'] = filtered_emails
+        else:
+            del pattern_findings['Email Addresses']
+    
+    # Filter out build/source file paths unless verbose
+    if not args.verbose and not args.no_filter and 'File Paths' in pattern_findings:
+        build_indicators = ['\\src\\', '\\build\\', '\\openssl\\', '\\local\\', '\\dvs\\p4\\']
+        filtered_paths = [path for path in pattern_findings['File Paths']
+                         if not any(indicator in path.lower() for indicator in build_indicators)]
+        if filtered_paths:
+            pattern_findings['File Paths'] = filtered_paths
+        else:
+            del pattern_findings['File Paths']
+    
+    # Scan for keywords
+    keyword_findings = scan_for_keywords(all_strings)
+    
+    # Detect shellcode
+    print("Analyzing for shellcode patterns...")
+    shellcode_findings = detect_shellcode(file_path)
+    
+    # Detect privilege escalation techniques
+    print("Checking for privilege escalation indicators...")
+    privesc_findings = detect_privilege_escalation(file_path)
+    
+    # Detect SSH patterns
+    print("Checking for SSH-related patterns...")
+    ssh_findings = detect_ssh_patterns(file_path)
+    
+    # Build output
+    output_lines = []
+    
+    # Add header with file info
+    output_lines.append("=" * 60)
+    output_lines.append("FILE ANALYSIS REPORT")
+    output_lines.append("=" * 60)
+    output_lines.append(f"\nFile: {file_path.name}")
+    output_lines.append(f"Path: {file_path.absolute()}")
+    output_lines.append(f"\nFile Size: {metadata.get('File Size', 'Unknown')}")
+    output_lines.append(f"Created:  {metadata.get('Created', 'Unknown')}")
+    output_lines.append(f"Modified: {metadata.get('Modified', 'Unknown')}")
+    output_lines.append(f"Accessed: {metadata.get('Accessed', 'Unknown')}")
+    output_lines.append(f"\nMD5:    {hashes.get('MD5', 'N/A')}")
+    output_lines.append(f"SHA1:   {hashes.get('SHA1', 'N/A')}")
+    output_lines.append(f"SHA256: {hashes.get('SHA256', 'N/A')}")
+    output_lines.append(f"\nStrings Extracted: {len(all_strings)}")
+    output_lines.append("\n" + "=" * 60)
+    output_lines.append("FINDINGS")
+    output_lines.append("=" * 60)
+    
+    # Display results
+    has_findings = False
+    
+    if pattern_findings:
+        output_lines.append("=== SUSPICIOUS PATTERNS FOUND ===\n")
+        for category, matches in pattern_findings.items():
+            output_lines.append(f"\n{category} ({len(matches)} found):")
+            for match in matches:
+                output_lines.append(f"  - {match}")
+    
+    if keyword_findings:
+        output_lines.append("\n\n=== SUSPICIOUS KEYWORDS FOUND ===\n")
+        for finding in keyword_findings:
+            output_lines.append(f"  - {finding}")
+    
+    if shellcode_findings:
+        output_lines.append("\n\n=== SHELLCODE DETECTION ===\n")
+        for category, matches in shellcode_findings.items():
+            output_lines.append(f"\n{category}:")
+            for match in matches:
+                output_lines.append(f"  - {match}")
+    
+    if privesc_findings:
+        output_lines.append("\n\n=== PRIVILEGE ESCALATION INDICATORS ===\n")
+        for category, matches in privesc_findings.items():
+            output_lines.append(f"\n{category} ({len(matches)} found):")
+            for match in matches[:5]:  # Show max 5 per category in summary
+                output_lines.append(f"  - {match}")
+            if len(matches) > 5:
+                output_lines.append(f"  ... and {len(matches) - 5} more")
+    
+    if not pattern_findings and not keyword_findings and not shellcode_findings and not privesc_findings:
+        output_lines.append("No suspicious strings detected.")
+    
+    # Output results
+    output_text = "\n".join(output_lines)
+    print("\n" + output_text)
+    
+    if args.output:
+        try:
+            with open(args.output, 'w', encoding='utf-8') as f:
+                f.write(output_text)
+            print(f"\n{'=' * 60}")
+            print(f"✓ Full report (with hashes) saved to: {args.output}")
+            print("=" * 60)
+        except Exception as e:
+            print(f"\nError saving report: {e}", file=sys.stderr)
+
+if __name__ == "__main__":
+    main()
+, '', url)
+                    # Skip W3C spec URLs and xmlns declarations (not interesting for malware analysis)
+                    if 'w3.org' in url.lower() or 'xmlns' in url.lower():
+                        continue
+                    # Re-check length after cleaning
+                    if len(url) >= 15:
+                        filtered_urls.append(url)
+                
+                if filtered_urls:
+                    findings[category] = list(set(filtered_urls))[:20]
+            else:
+                findings[category] = list(set(matches))[:20]  # Limit to 20 unique matches
+    
+    # Scan SQL injection patterns
+    for category, pattern in SQL_INJECTION_PATTERNS.items():
+        matches = []
+        for s in strings:
+            found = re.findall(pattern, s, re.IGNORECASE)
+            if found:
+                matches.append(s)  # Include full string for context
+        
+        if matches:
+            findings[f"SQL Injection - {category}"] = list(set(matches))[:15]
+    
+    return findings
+
+def scan_for_keywords(strings):
+    """Scan strings for suspicious keywords."""
+    found_keywords = []
+    
+    for s in strings:
+        s_lower = s.lower()
+        for keyword in SUSPICIOUS_KEYWORDS:
+            if keyword in s_lower:
+                found_keywords.append(s)
+                break
+    
+    return list(set(found_keywords))[:30]  # Limit to 30 unique matches
+
+def detect_shellcode(file_path):
+    """Detect potential shellcode in binary file."""
+    findings = {}
+    
+    try:
+        with open(file_path, 'rb') as f:
+            data = f.read()
+        
+        file_size = len(data)
+        
+        # Check for shellcode signatures (with higher thresholds to reduce false positives)
+        signatures_found = []
+        
+        # NOP sled - only report if very long
+        nop_sled = b'\x90' * 20
+        if nop_sled in data:
+            count = data.count(nop_sled)
+            signatures_found.append(f"Long NOP Sled (20+ NOPs) (found {count} times)")
+        
+        # Syscalls - adjust thresholds based on file size (Go binaries are large)
+        syscall_x64_count = data.count(b'\x0f\x05')
+        # For large files (>5MB), be more lenient
+        syscall_threshold = 500 if file_size > 5_000_000 else 200
+        
+        if syscall_x64_count > syscall_threshold:
+            # Calculate density (syscalls per MB)
+            density = syscall_x64_count / (file_size / 1_000_000)
+            if density > 200:  # More than 200 per MB is suspicious
+                signatures_found.append(f"Very high x64 syscall density ({syscall_x64_count} times, {density:.0f}/MB)")
+        
+        linux_syscall_count = data.count(b'\xcd\x80')
+        if linux_syscall_count > 100:
+            signatures_found.append(f"Excessive Linux syscalls ({linux_syscall_count} times)")
+        
+        # GetPC trick - common in position-independent shellcode, but also in legit code
+        # Only report if combined with other indicators
+        getpc_count = data.count(b'\xe8\x00\x00\x00\x00')
+        suspicious_apis = any(api in data for api in [
+            b'VirtualAlloc', b'VirtualProtect', b'CreateRemoteThread', 
+            b'WriteProcessMemory', b'NtCreateThreadEx'
+        ])
+        
+        if getpc_count > 50 and suspicious_apis:
+            # Check density
+            getpc_density = getpc_count / (file_size / 1_000_000)
+            if getpc_density > 50:  # More than 50 per MB
+                signatures_found.append(f"GetPC trick with suspicious APIs ({getpc_count} times, {getpc_density:.0f}/MB)")
+        
+        if signatures_found:
+            findings['Shellcode Signatures'] = signatures_found
+        
+        # Check for shellcode-related APIs (filter out common legitimate ones)
+        suspicious_apis_list = []
+        api_patterns = [
+            (b'VirtualAlloc', 'Memory allocation'),
+            (b'VirtualProtect', 'Memory protection modification'),
+            (b'CreateRemoteThread', 'Remote thread creation'),
+            (b'WriteProcessMemory', 'Process memory writing'),
+            (b'NtCreateThreadEx', 'Native thread creation'),
+            (b'RtlCreateUserThread', 'User thread creation'),
+        ]
+        
+        # Only report if multiple suspicious APIs are present
+        api_count = sum(1 for api, _ in api_patterns if api in data)
+        if api_count >= 3:
+            for api, description in api_patterns:
+                if api in data:
+                    suspicious_apis_list.append(f"{api.decode('ascii')} ({description})")
+        
+        if suspicious_apis_list:
+            findings['Suspicious Memory APIs'] = suspicious_apis_list
+        
+        # Detect high entropy sections (potential encrypted/obfuscated shellcode)
+        entropy_sections = detect_high_entropy_sections(data, threshold=7.5)
         if entropy_sections:
             findings['Very High Entropy Sections'] = entropy_sections
         
@@ -686,4 +1279,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
