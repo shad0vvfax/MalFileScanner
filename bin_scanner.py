@@ -8,7 +8,7 @@ import re
 import sys
 import argparse
 import hashlib
-import struct
+import base64
 from pathlib import Path
 from collections import Counter
 from datetime import datetime
@@ -558,6 +558,136 @@ def detect_ssh_patterns(file_path):
     
     return findings
 
+def detect_base64_payloads(strings):
+    """Detect base64 encoded strings that might be payloads."""
+    findings = {
+        'Suspicious Base64 Strings': [],
+        'Decoded Indicators': []
+    }
+    
+    # Pattern for base64 strings (minimum 40 chars to reduce false positives)
+    base64_pattern = re.compile(r'([A-Za-z0-9+/]{40,}={0,2})')
+    
+    suspicious_keywords = [
+        b'powershell', b'cmd.exe', b'bash', b'sh -c', b'/bin/',
+        b'http://', b'https://', b'wget', b'curl', b'invoke',
+        b'download', b'exec', b'eval', b'system', b'shell',
+        b'MZ', b'PE', b'\x4d\x5a',  # PE header
+        b'#!/', b'<?php', b'<script',
+        b'password', b'passwd', b'secret', b'key=',
+    ]
+    
+    shellcode_patterns = [
+        b'\x90\x90\x90',  # NOP sled
+        b'\xeb\xfe',  # JMP short
+        b'\xff\xe4',  # JMP ESP
+        b'\x55\x89\xe5',  # Function prologue
+    ]
+    
+    for string in strings:
+        matches = base64_pattern.findall(string)
+        
+        for match in matches:
+            if len(match) < 40:  # Skip short matches
+                continue
+            
+            try:
+                # Try to decode
+                decoded = base64.b64decode(match, validate=True)
+                
+                # Check if decoded content is binary/suspicious
+                if len(decoded) < 10:
+                    continue
+                
+                # Calculate entropy of decoded data
+                if len(decoded) > 0:
+                    entropy = 0
+                    counter = Counter(decoded)
+                    for count in counter.values():
+                        p = count / len(decoded)
+                        if p > 0:
+                            import math
+                            entropy -= p * math.log2(p)
+                    
+                    # Check for suspicious keywords in decoded content
+                    is_suspicious = False
+                    found_indicators = []
+                    
+                    for keyword in suspicious_keywords:
+                        if keyword in decoded.lower():
+                            is_suspicious = True
+                            found_indicators.append(keyword.decode('ascii', errors='ignore'))
+                    
+                    # Check for shellcode patterns
+                    for pattern in shellcode_patterns:
+                        if pattern in decoded:
+                            is_suspicious = True
+                            found_indicators.append('shellcode pattern')
+                            break
+                    
+                    # Check for PE/MZ header
+                    if decoded[:2] == b'MZ' or decoded[:2] == b'ZM':
+                        is_suspicious = True
+                        found_indicators.append('PE executable')
+                    
+                    # Check for script headers
+                    if decoded[:2] == b'#!' or b'<?php' in decoded[:100]:
+                        is_suspicious = True
+                        found_indicators.append('script header')
+                    
+                    # High entropy in decoded content (compressed/encrypted)
+                    if entropy > 7.0 and len(decoded) > 100:
+                        is_suspicious = True
+                        found_indicators.append(f'high entropy ({entropy:.2f})')
+                    
+                    # Check if decoded looks like it could be code (many printable chars)
+                    printable_count = sum(1 for b in decoded if 32 <= b < 127)
+                    printable_ratio = printable_count / len(decoded)
+                    
+                    if is_suspicious:
+                        # Truncate for display
+                        display_match = match[:60] + '...' if len(match) > 60 else match
+                        preview = ''.join(chr(b) if 32 <= b < 127 else '.' for b in decoded[:50])
+                        if len(decoded) > 50:
+                            preview += '...'
+                        
+                        findings['Suspicious Base64 Strings'].append(
+                            f"{display_match} ({len(decoded)} bytes decoded)"
+                        )
+                        
+                        indicator_str = ', '.join(set(found_indicators))
+                        findings['Decoded Indicators'].append(
+                            f"Indicators: {indicator_str} | Preview: {preview}"
+                        )
+                    
+                    # Even if not obviously suspicious, flag very long base64 with high entropy
+                    elif len(decoded) > 500 and entropy > 6.5:
+                        display_match = match[:60] + '...' if len(match) > 60 else match
+                        findings['Suspicious Base64 Strings'].append(
+                            f"{display_match} ({len(decoded)} bytes, entropy {entropy:.2f})"
+                        )
+                        findings['Decoded Indicators'].append(
+                            f"Large encoded data with high entropy (possible obfuscation)"
+                        )
+                
+            except Exception:
+                # Not valid base64 or decoding failed
+                continue
+    
+    # Remove empty categories
+    if not findings['Suspicious Base64 Strings']:
+        del findings['Suspicious Base64 Strings']
+    if not findings['Decoded Indicators']:
+        del findings['Decoded Indicators']
+    
+    # Limit results
+    if 'Suspicious Base64 Strings' in findings:
+        findings['Suspicious Base64 Strings'] = findings['Suspicious Base64 Strings'][:10]
+    if 'Decoded Indicators' in findings:
+        findings['Decoded Indicators'] = findings['Decoded Indicators'][:10]
+    
+    return findings
+
 def calculate_file_hashes(file_path):
     """Calculate MD5, SHA1, and SHA256 hashes."""
     hashes = {}
@@ -814,6 +944,10 @@ def main():
     print("Checking for SSH-related patterns...")
     ssh_findings = detect_ssh_patterns(file_path)
     
+    # Detect base64 encoded payloads
+    print("Analyzing base64 encoded strings...")
+    base64_findings = detect_base64_payloads(all_strings)
+    
     # Build output
     output_lines = []
     
@@ -896,6 +1030,14 @@ def main():
             output_lines.append(f"\n{category} ({len(matches)} found):")
             for match in matches:
                 output_lines.append(f"  - {match}")
+    
+    if base64_findings:
+        output_lines.append("\n\n=== BASE64 ENCODED PAYLOADS ===\n")
+        has_findings = True
+        for category, matches in base64_findings.items():
+            output_lines.append(f"\n{category}:")
+            for i, match in enumerate(matches):
+                output_lines.append(f"  [{i+1}] {match}")
     
     if not has_findings:
         output_lines.append("\n✓ No suspicious patterns detected.")
