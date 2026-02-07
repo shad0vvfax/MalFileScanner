@@ -1,7 +1,19 @@
 #!/usr/bin/env python3
 """
-Binary String Scanner - Analyzes binaries for potentially suspicious strings
-Useful for malware analysis and security research
+MalFileScanner - Comprehensive malware analysis tool for files and executables
+Analyzes files for suspicious strings, patterns, and malicious indicators
+
+Features:
+- Multi-language base64 payload detection (PowerShell, PHP, JavaScript, Python, Bash)
+- Shellcode and exploit detection
+- Privilege escalation technique identification
+- SSH key and configuration abuse detection
+- SQL injection pattern recognition
+- Packer and compiler identification
+- File hashing (MD5, SHA1, SHA256)
+- Detailed analysis reports
+
+Useful for malware analysis, incident response, and security research
 """
 
 import re
@@ -22,6 +34,7 @@ SUSPICIOUS_PATTERNS = {
     'File Paths': r'[A-Za-z]:\\(?:[^\x00\\/:*?"<>|\r\n]+\\)+[^\x00\\/:*?"<>|\r\n]+',
     'Shell Commands': r'(?:cmd\.exe|powershell\.exe|bash|sh)(?:\s+[-/][^\x00]+|\s+[A-Za-z0-9_]+\.(?:bat|ps1|sh|py))',
     'Suspicious Scripts': r'(?:wget|curl|invoke-webrequest|iwr|downloadstring|downloadfile)\s+http',
+    'Malicious PowerShell Flags': r'powershell(?:\.exe)?\s+.*?(?:-(?:nop|noprofile|noninteractive|executionpolicy\s+bypass|ep\s+bypass|w(?:indowstyle)?\s+hidden|enc|encodedcommand|command|-)|/(?:nop|noprofile|ep\s+bypass|w\s+hidden|enc|command|-))',
 }
 
 # SQL Injection patterns
@@ -568,6 +581,61 @@ def detect_base64_payloads(strings):
     # Pattern for base64 strings (minimum 40 chars to reduce false positives)
     base64_pattern = re.compile(r'([A-Za-z0-9+/]{40,}={0,2})')
     
+    # PowerShell encoded command pattern
+    powershell_encoded = re.compile(
+        r'powershell(?:\.exe)?\s+.*?(?:-e(?:nc(?:odedcommand)?)?|/e(?:nc(?:odedcommand)?)?)\s+([A-Za-z0-9+/=]{40,})',
+        re.IGNORECASE
+    )
+    
+    # PHP base64 decode patterns
+    php_base64 = re.compile(
+        r'(?:base64_decode|eval)\s*\(\s*["\']([A-Za-z0-9+/=]{40,})["\']',
+        re.IGNORECASE
+    )
+    
+    # JavaScript/Node.js base64 patterns
+    js_base64 = re.compile(
+        r'(?:atob|Buffer\.from)\s*\(\s*["\']([A-Za-z0-9+/=]{40,})["\']',
+        re.IGNORECASE
+    )
+    
+    # Python base64 patterns
+    python_base64 = re.compile(
+        r'(?:base64\.(?:b64decode|decode(?:string)?)|codecs\.decode)\s*\(\s*["\']([A-Za-z0-9+/=]{40,})["\']',
+        re.IGNORECASE
+    )
+    
+    # Bash/shell base64 patterns
+    bash_base64 = re.compile(
+        r'(?:base64\s+(?:-d|--decode)|echo\s+["\']([A-Za-z0-9+/=]{40,})["\'].*?\|\s*base64\s+-d)',
+        re.IGNORECASE
+    )
+    
+    # Generic pattern: base64 in eval/exec contexts
+    eval_base64 = re.compile(
+        r'(?:eval|exec|system|shell_exec|passthru|assert)\s*\(\s*["\']?(?:base64_decode|atob|Buffer\.from)?\s*\(?["\']([A-Za-z0-9+/=]{40,})',
+        re.IGNORECASE
+    )
+    
+    # PowerShell suspicious patterns to check in decoded content
+    powershell_suspicious_patterns = [
+        (r'-(?:nop|noprofile)', 'NoProfile flag'),
+        (r'-(?:ep|executionpolicy)\s+(?:bypass|unrestricted)', 'Bypass execution policy'),
+        (r'-(?:w|windowstyle)\s+hidden', 'Hidden window'),
+        (r'-(?:noninteractive|noni)', 'Non-interactive mode'),
+        (r'invoke-expression|iex', 'Invoke-Expression (code execution)'),
+        (r'downloadstring|downloadfile', 'Download content'),
+        (r'net\.webclient', '.NET WebClient (download)'),
+        (r'invoke-webrequest|iwr', 'Invoke-WebRequest'),
+        (r'start-process.*-windowstyle\s+hidden', 'Hidden process execution'),
+        (r'invoke-mimikatz', 'Mimikatz (credential theft)'),
+        (r'invoke-shellcode', 'Shellcode injection'),
+        (r'invoke-command.*-scriptblock', 'Remote command execution'),
+        (r'new-object\s+system\.net\.webclient', 'WebClient instantiation'),
+        (r'bitstransfer', 'BITS transfer'),
+        (r'convertto-securestring.*-asplaintext', 'Plaintext credential conversion'),
+    ]
+    
     suspicious_keywords = [
         b'powershell', b'cmd.exe', b'bash', b'sh -c', b'/bin/',
         b'http://', b'https://', b'wget', b'curl', b'invoke',
@@ -575,6 +643,10 @@ def detect_base64_payloads(strings):
         b'MZ', b'PE', b'\x4d\x5a',  # PE header
         b'#!/', b'<?php', b'<script',
         b'password', b'passwd', b'secret', b'key=',
+        b'iex', b'invoke-expression', b'downloadstring', b'downloadfile',
+        b'invoke-webrequest', b'net.webclient', b'bitstransfer',
+        b'start-process', b'invoke-command', b'invoke-mimikatz',
+        b'bypass', b'unrestricted', b'remotesigned',
     ]
     
     shellcode_patterns = [
@@ -584,95 +656,167 @@ def detect_base64_payloads(strings):
         b'\x55\x89\xe5',  # Function prologue
     ]
     
+    processed_base64 = set()  # Track already processed base64 strings
+    
+    def check_powershell_patterns(decoded_text):
+        """Check decoded text for PowerShell suspicious patterns."""
+        ps_indicators = []
+        for pattern, description in powershell_suspicious_patterns:
+            if re.search(pattern, decoded_text, re.IGNORECASE):
+                ps_indicators.append(description)
+        return ps_indicators
+    
+    def process_base64_match(b64_string, context_type, original_string=""):
+        """Process a base64 match and add to findings."""
+        if b64_string in processed_base64:
+            return
+        
+        processed_base64.add(b64_string)
+        
+        try:
+            decoded_bytes = base64.b64decode(b64_string)
+            
+            if len(decoded_bytes) < 10:
+                return
+            
+            # Try different decodings
+            decoded_text = None
+            encoding_used = None
+            
+            # Try UTF-16LE first (PowerShell)
+            try:
+                decoded_text = decoded_bytes.decode('utf-16-le')
+                encoding_used = 'UTF-16LE'
+            except:
+                # Try UTF-8
+                try:
+                    decoded_text = decoded_bytes.decode('utf-8')
+                    encoding_used = 'UTF-8'
+                except:
+                    # Fallback to ASCII
+                    try:
+                        decoded_text = decoded_bytes.decode('ascii', errors='ignore')
+                        encoding_used = 'ASCII'
+                    except:
+                        pass
+            
+            # Calculate entropy
+            entropy = 0
+            if len(decoded_bytes) > 0:
+                counter = Counter(decoded_bytes)
+                for count in counter.values():
+                    p = count / len(decoded_bytes)
+                    if p > 0:
+                        import math
+                        entropy -= p * math.log2(p)
+            
+            # Check for suspicious content
+            is_suspicious = False
+            found_indicators = [context_type]
+            
+            # Check keywords
+            for keyword in suspicious_keywords:
+                if keyword in decoded_bytes.lower():
+                    is_suspicious = True
+                    found_indicators.append(keyword.decode('ascii', errors='ignore'))
+            
+            # Check shellcode patterns
+            for pattern in shellcode_patterns:
+                if pattern in decoded_bytes:
+                    is_suspicious = True
+                    found_indicators.append('shellcode pattern')
+                    break
+            
+            # Check for PE header
+            if decoded_bytes[:2] == b'MZ':
+                is_suspicious = True
+                found_indicators.append('PE executable')
+            
+            # Check for high entropy
+            if entropy > 7.0 and len(decoded_bytes) > 100:
+                is_suspicious = True
+                found_indicators.append(f'high entropy ({entropy:.2f})')
+            
+            # Check PowerShell patterns if we have decoded text
+            if decoded_text:
+                ps_indicators = check_powershell_patterns(decoded_text)
+                if ps_indicators:
+                    is_suspicious = True
+                    found_indicators.extend(ps_indicators[:3])
+            
+            if is_suspicious or context_type != "Standalone":
+                display_b64 = b64_string[:60] + '...' if len(b64_string) > 60 else b64_string
+                
+                # Create preview
+                if decoded_text:
+                    preview = decoded_text[:150] + '...' if len(decoded_text) > 150 else decoded_text
+                else:
+                    preview = ''.join(chr(b) if 32 <= b < 127 else '.' for b in decoded_bytes[:50])
+                    if len(decoded_bytes) > 50:
+                        preview += '...'
+                
+                findings['Suspicious Base64 Strings'].append(
+                    f"{display_b64} ({len(decoded_bytes)} bytes decoded)"
+                )
+                
+                if encoding_used:
+                    found_indicators.insert(1, encoding_used)
+                
+                indicator_str = ', '.join(set(found_indicators))
+                findings['Decoded Indicators'].append(
+                    f"Indicators: {indicator_str} | Content: {preview}"
+                )
+        
+        except Exception:
+            pass
+    
+    # Check for PowerShell encoded commands
+    for string in strings:
+        ps_matches = powershell_encoded.findall(string)
+        for ps_encoded in ps_matches:
+            process_base64_match(ps_encoded, "PowerShell -EncodedCommand", string)
+    
+    # Check for PHP base64_decode
+    for string in strings:
+        php_matches = php_base64.findall(string)
+        for php_b64 in php_matches:
+            process_base64_match(php_b64, "PHP base64_decode/eval", string)
+    
+    # Check for JavaScript atob/Buffer.from
+    for string in strings:
+        js_matches = js_base64.findall(string)
+        for js_b64 in js_matches:
+            process_base64_match(js_b64, "JavaScript atob/Buffer.from", string)
+    
+    # Check for Python base64
+    for string in strings:
+        py_matches = python_base64.findall(string)
+        for py_b64 in py_matches:
+            process_base64_match(py_b64, "Python base64.b64decode", string)
+    
+    # Check for eval/exec with base64
+    for string in strings:
+        eval_matches = eval_base64.findall(string)
+        for eval_b64 in eval_matches:
+            process_base64_match(eval_b64, "eval/exec with base64", string)
+    
+    # Check for standalone base64 strings (not in a command context)
     for string in strings:
         matches = base64_pattern.findall(string)
-        
         for match in matches:
-            if len(match) < 40:  # Skip short matches
-                continue
-            
-            try:
-                # Try to decode
-                decoded = base64.b64decode(match, validate=True)
-                
-                # Check if decoded content is binary/suspicious
-                if len(decoded) < 10:
-                    continue
-                
-                # Calculate entropy of decoded data
-                if len(decoded) > 0:
-                    entropy = 0
-                    counter = Counter(decoded)
-                    for count in counter.values():
-                        p = count / len(decoded)
-                        if p > 0:
-                            import math
-                            entropy -= p * math.log2(p)
-                    
-                    # Check for suspicious keywords in decoded content
-                    is_suspicious = False
-                    found_indicators = []
-                    
-                    for keyword in suspicious_keywords:
-                        if keyword in decoded.lower():
-                            is_suspicious = True
-                            found_indicators.append(keyword.decode('ascii', errors='ignore'))
-                    
-                    # Check for shellcode patterns
-                    for pattern in shellcode_patterns:
-                        if pattern in decoded:
-                            is_suspicious = True
-                            found_indicators.append('shellcode pattern')
-                            break
-                    
-                    # Check for PE/MZ header
-                    if decoded[:2] == b'MZ' or decoded[:2] == b'ZM':
-                        is_suspicious = True
-                        found_indicators.append('PE executable')
-                    
-                    # Check for script headers
-                    if decoded[:2] == b'#!' or b'<?php' in decoded[:100]:
-                        is_suspicious = True
-                        found_indicators.append('script header')
-                    
-                    # High entropy in decoded content (compressed/encrypted)
-                    if entropy > 7.0 and len(decoded) > 100:
-                        is_suspicious = True
-                        found_indicators.append(f'high entropy ({entropy:.2f})')
-                    
-                    # Check if decoded looks like it could be code (many printable chars)
-                    printable_count = sum(1 for b in decoded if 32 <= b < 127)
-                    printable_ratio = printable_count / len(decoded)
-                    
-                    if is_suspicious:
-                        # Truncate for display
-                        display_match = match[:60] + '...' if len(match) > 60 else match
-                        preview = ''.join(chr(b) if 32 <= b < 127 else '.' for b in decoded[:50])
-                        if len(decoded) > 50:
-                            preview += '...'
+            if len(match) >= 40 and match not in processed_base64:
+                # Only process if it looks suspicious (contains certain patterns)
+                try:
+                    decoded = base64.b64decode(match, validate=True)
+                    if len(decoded) >= 10:
+                        # Quick check for suspicious content
+                        has_suspicious = any(kw in decoded.lower() for kw in suspicious_keywords[:10])
+                        has_binary = decoded[:2] == b'MZ' or b'\x90\x90\x90' in decoded
                         
-                        findings['Suspicious Base64 Strings'].append(
-                            f"{display_match} ({len(decoded)} bytes decoded)"
-                        )
-                        
-                        indicator_str = ', '.join(set(found_indicators))
-                        findings['Decoded Indicators'].append(
-                            f"Indicators: {indicator_str} | Preview: {preview}"
-                        )
-                    
-                    # Even if not obviously suspicious, flag very long base64 with high entropy
-                    elif len(decoded) > 500 and entropy > 6.5:
-                        display_match = match[:60] + '...' if len(match) > 60 else match
-                        findings['Suspicious Base64 Strings'].append(
-                            f"{display_match} ({len(decoded)} bytes, entropy {entropy:.2f})"
-                        )
-                        findings['Decoded Indicators'].append(
-                            f"Large encoded data with high entropy (possible obfuscation)"
-                        )
-                
-            except Exception:
-                # Not valid base64 or decoding failed
-                continue
+                        if has_suspicious or has_binary:
+                            process_base64_match(match, "Standalone", string)
+                except:
+                    pass
     
     # Remove empty categories
     if not findings['Suspicious Base64 Strings']:
@@ -765,7 +909,8 @@ def detect_packer_compiler(file_path):
         for compiler, signatures in compiler_signatures.items():
             for sig in signatures:
                 if sig in data:
-                    info['Compiler/Language'].append(compiler)
+                    if compiler not in info['Compiler/Language']:
+                        info['Compiler/Language'].append(compiler)
                     break
         
         # Detect packers and protectors
@@ -805,7 +950,8 @@ def detect_packer_compiler(file_path):
         for packer, signatures in packer_signatures.items():
             for sig in signatures:
                 if sig in data:
-                    info['Packer/Protector'].append(packer)
+                    if packer not in info['Packer/Protector']:
+                        info['Packer/Protector'].append(packer)
                     break
         
         # Additional heuristics for packed files
@@ -818,7 +964,9 @@ def detect_packer_compiler(file_path):
             found_suspicious = []
             for section in suspicious_sections:
                 if section in data:
-                    found_suspicious.append(section.decode('ascii', errors='ignore'))
+                    section_name = section.decode('ascii', errors='ignore')
+                    if section_name not in found_suspicious:
+                        found_suspicious.append(section_name)
             
             if found_suspicious:
                 info['Signatures'].append(f"Suspicious section names: {', '.join(found_suspicious)}")
@@ -835,10 +983,6 @@ def detect_packer_compiler(file_path):
                 if entropy > 7.2:
                     info['Signatures'].append(f"High entropy detected ({entropy:.2f}/8.0) - possible packing/encryption")
         
-        # Remove duplicates
-        info['Compiler/Language'] = list(set(info['Compiler/Language']))
-        info['Packer/Protector'] = list(set(info['Packer/Protector']))
-        
     except Exception as e:
         print(f"Error detecting packer/compiler: {e}", file=sys.stderr)
     
@@ -846,9 +990,14 @@ def detect_packer_compiler(file_path):
 
 def main():
     parser = argparse.ArgumentParser(
-        description='Scan binary files for potentially suspicious strings'
+        description='MalFileScanner - Comprehensive malware analysis tool for files and executables',
+        epilog='Examples:\n'
+               '  %(prog)s malware.exe\n'
+               '  %(prog)s suspicious.ps1 -o report.txt\n'
+               '  %(prog)s webshell.php -v --no-filter\n',
+        formatter_class=argparse.RawDescriptionHelpFormatter
     )
-    parser.add_argument('file', help='Binary file to scan')
+    parser.add_argument('file', help='File to scan (binary, script, or text)')
     parser.add_argument('-m', '--min-length', type=int, default=4,
                        help='Minimum string length (default: 4)')
     parser.add_argument('-e', '--encoding', choices=['ascii', 'unicode', 'both'],
@@ -866,21 +1015,20 @@ def main():
         print(f"Error: File '{args.file}' not found", file=sys.stderr)
         sys.exit(1)
     
-    # Calculate hashes and get metadata
+    # Show scanning progress
     print("=" * 60)
-    print("FILE ANALYSIS")
+    print("MALFILESCANNER v1.0")
     print("=" * 60)
-    print(f"File: {file_path.name}")
-    print(f"Path: {file_path.absolute()}")
+    print(f"Target: {file_path.name}")
     
-    metadata = get_file_metadata(file_path)
-    print(f"Size: {metadata.get('File Size', 'Unknown')}")
-    
-    print("\nCalculating file hashes...")
+    print("\n[*] Calculating file hashes...")
     hashes = calculate_file_hashes(file_path)
     
-    print("Detecting packer/compiler...")
+    print("[*] Detecting packer/compiler...")
     packer_info = detect_packer_compiler(file_path)
+    
+    print("[*] Getting file metadata...")
+    metadata = get_file_metadata(file_path)
     
     print("\n" + "=" * 60)
     print("SCANNING FOR SUSPICIOUS PATTERNS")
@@ -933,20 +1081,24 @@ def main():
     keyword_findings = scan_for_keywords(all_strings)
     
     # Detect shellcode
-    print("Analyzing for shellcode patterns...")
+    print("[*] Analyzing for shellcode patterns...")
     shellcode_findings = detect_shellcode(file_path)
     
     # Detect privilege escalation techniques
-    print("Checking for privilege escalation indicators...")
+    print("[*] Checking for privilege escalation indicators...")
     privesc_findings = detect_privilege_escalation(file_path)
     
     # Detect SSH patterns
-    print("Checking for SSH-related patterns...")
+    print("[*] Checking for SSH-related patterns...")
     ssh_findings = detect_ssh_patterns(file_path)
     
     # Detect base64 encoded payloads
-    print("Analyzing base64 encoded strings...")
+    print("[*] Analyzing base64 encoded strings...")
     base64_findings = detect_base64_payloads(all_strings)
+    
+    print("\n" + "=" * 60)
+    print("ANALYSIS COMPLETE")
+    print("=" * 60)
     
     # Build output
     output_lines = []
