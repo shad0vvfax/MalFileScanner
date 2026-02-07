@@ -1,4 +1,4 @@
-binscanner.py \<arguments\>  
+mal_file_scanner.py \<arguments\>  
 
 'file',  
 '-m', '--min-length', type=int, default=4, help='Minimum string length (default: 4)'  
