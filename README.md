@@ -1,3 +1,5 @@
+binscanner.py <arguments>  
+
 'file',  
 '-m', '--min-length', type=int, default=4, help='Minimum string length (default: 4)'  
 '-e', '--encoding', choices=['ascii', 'unicode', 'both'], default='both', help='String encoding to extract'  
