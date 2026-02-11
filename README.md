@@ -1,4 +1,4 @@
-mal_file_scanner.py \<arguments\>  
+python3 mal_file_scanner.py \<arguments\>  
 
 'file',  
 '-m', '--min-length', type=int, default=4, help='Minimum string length (default: 4)'  
