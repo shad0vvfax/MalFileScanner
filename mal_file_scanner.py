@@ -666,7 +666,7 @@ def detect_base64_payloads(strings):
                 ps_indicators.append(description)
         return ps_indicators
     
-    def process_base64_match(b64_string, context_type, original_string=""):
+    def process_base64_match(b64_string, context_type):
         """Process a base64 match and add to findings."""
         if b64_string in processed_base64:
             return
@@ -687,17 +687,17 @@ def detect_base64_payloads(strings):
             try:
                 decoded_text = decoded_bytes.decode('utf-16-le')
                 encoding_used = 'UTF-16LE'
-            except:
+            except UnicodeDecodeError:
                 # Try UTF-8
                 try:
                     decoded_text = decoded_bytes.decode('utf-8')
                     encoding_used = 'UTF-8'
-                except:
+                except UnicodeDecodeError:
                     # Fallback to ASCII
                     try:
                         decoded_text = decoded_bytes.decode('ascii', errors='ignore')
                         encoding_used = 'ASCII'
-                    except:
+                    except UnicodeDecodeError:
                         pass
             
             # Calculate entropy
@@ -767,38 +767,39 @@ def detect_base64_payloads(strings):
                     f"Indicators: {indicator_str} | Content: {preview}"
                 )
         
-        except Exception:
+        except (ValueError, TypeError, base64.binascii.Error) as e:
+            # Invalid base64 or decoding error
             pass
     
     # Check for PowerShell encoded commands
     for string in strings:
         ps_matches = powershell_encoded.findall(string)
         for ps_encoded in ps_matches:
-            process_base64_match(ps_encoded, "PowerShell -EncodedCommand", string)
+            process_base64_match(ps_encoded, "PowerShell -EncodedCommand")
     
     # Check for PHP base64_decode
     for string in strings:
         php_matches = php_base64.findall(string)
         for php_b64 in php_matches:
-            process_base64_match(php_b64, "PHP base64_decode/eval", string)
+            process_base64_match(php_b64, "PHP base64_decode/eval")
     
     # Check for JavaScript atob/Buffer.from
     for string in strings:
         js_matches = js_base64.findall(string)
         for js_b64 in js_matches:
-            process_base64_match(js_b64, "JavaScript atob/Buffer.from", string)
+            process_base64_match(js_b64, "JavaScript atob/Buffer.from")
     
     # Check for Python base64
     for string in strings:
         py_matches = python_base64.findall(string)
         for py_b64 in py_matches:
-            process_base64_match(py_b64, "Python base64.b64decode", string)
+            process_base64_match(py_b64, "Python base64.b64decode")
     
     # Check for eval/exec with base64
     for string in strings:
         eval_matches = eval_base64.findall(string)
         for eval_b64 in eval_matches:
-            process_base64_match(eval_b64, "eval/exec with base64", string)
+            process_base64_match(eval_b64, "eval/exec with base64")
     
     # Check for standalone base64 strings (not in a command context)
     for string in strings:
@@ -814,8 +815,9 @@ def detect_base64_payloads(strings):
                         has_binary = decoded[:2] == b'MZ' or b'\x90\x90\x90' in decoded
                         
                         if has_suspicious or has_binary:
-                            process_base64_match(match, "Standalone", string)
-                except:
+                            process_base64_match(match, "Standalone")
+                except (ValueError, TypeError, base64.binascii.Error):
+                    # Invalid base64
                     pass
     
     # Remove empty categories
