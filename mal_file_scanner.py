@@ -694,11 +694,8 @@ def detect_base64_payloads(strings):
                     encoding_used = 'UTF-8'
                 except UnicodeDecodeError:
                     # Fallback to ASCII
-                    try:
-                        decoded_text = decoded_bytes.decode('ascii', errors='ignore')
-                        encoding_used = 'ASCII'
-                    except UnicodeDecodeError:
-                        pass
+                    decoded_text = decoded_bytes.decode('ascii', errors='ignore')
+                    encoding_used = 'ASCII'
             
             # Calculate entropy
             entropy = 0
@@ -759,15 +756,18 @@ def detect_base64_payloads(strings):
                     f"{display_b64} ({len(decoded_bytes)} bytes decoded)"
                 )
                 
+                # Build indicators list with encoding info
                 if encoding_used:
-                    found_indicators.insert(1, encoding_used)
+                    # Insert encoding right after context type
+                    indicator_str = f"{context_type}, {encoding_used}, {', '.join(set(found_indicators))}"
+                else:
+                    indicator_str = f"{context_type}, {', '.join(set(found_indicators))}"
                 
-                indicator_str = ', '.join(set(found_indicators))
                 findings['Decoded Indicators'].append(
                     f"Indicators: {indicator_str} | Content: {preview}"
                 )
         
-        except (ValueError, TypeError, base64.binascii.Error) as e:
+        except (ValueError, TypeError, base64.binascii.Error):
             # Invalid base64 or decoding error
             pass
     
