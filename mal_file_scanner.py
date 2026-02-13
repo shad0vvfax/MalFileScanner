@@ -607,7 +607,7 @@ def detect_base64_payloads(strings):
     
     # Bash/shell base64 patterns
     bash_base64 = re.compile(
-        r'(?:base64\s+(?:-d|--decode)|echo\s+["\']([A-Za-z0-9+/=]{40,})["\'].*?\|\s*base64\s+-d)',
+        r'(?:echo\s+["\']([A-Za-z0-9+/=]{40,})["\'].*?\|\s*base64\s+(?:-d|--decode)|base64\s+(?:-d|--decode).*?<<<\s*["\']([A-Za-z0-9+/=]{40,}))',
         re.IGNORECASE
     )
     
@@ -794,6 +794,15 @@ def detect_base64_payloads(strings):
         py_matches = python_base64.findall(string)
         for py_b64 in py_matches:
             process_base64_match(py_b64, "Python base64.b64decode")
+    
+    # Check for Bash/shell base64
+    for string in strings:
+        bash_matches = bash_base64.findall(string)
+        for bash_match in bash_matches:
+            # bash_match is a tuple from multiple capture groups
+            bash_b64 = bash_match[0] if bash_match[0] else bash_match[1]
+            if bash_b64:
+                process_base64_match(bash_b64, "Bash base64 decode")
     
     # Check for eval/exec with base64
     for string in strings:
